@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Cloudflare R2 Bucket Selection and Upload</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+
+    input,
+    button {
+      margin-bottom: 10px;
+    }
+
+    #message {
+      margin-top: 20px;
+      padding: 10px;
+      font-weight: bold;
+    }
+
+    .success {
+      color: green;
+      background-color: #e0f0e0;
+    }
+
+    .error {
+      color: red;
+      background-color: #f0e0e0;
+    }
+
+    #corsConfigTextarea {
+      width: 100%;
+      height: 150px;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Cloudflare R2 Bucket Selection and Upload</h1>
+
+  <label for="endpoint">Endpoint:</label>
+  <input type="text" id="endpoint" required><br>
+
+  <label for="accessKeyId">Access Key ID:</label>
+  <input type="text" id="accessKeyId" required><br>
+
+  <label for="secretAccessKey">Secret Access Key:</label>
+  <input type="password" id="secretAccessKey" required><br>
+
+  <label for="bucketName">Bucket Name:</label>
+  <input type="text" id="bucketName" required><br>
+
+  <label for="filePath">File Path:</label>
+  <input type="text" id="filePath" placeholder="EX.file1/file2"><br>
+
+  <label for="fileUpload">Files to Upload:</label>
+  <input type="file" id="fileUpload" multiple required><br>
+
+  <label for="folderUpload">
+    <input type="checkbox" id="folderUpload">
+    Select Folder
+  </label><br>
+
+  <label for="corsConfigTextarea">CORS Configuration:</label><br>
+  <textarea id="corsConfigTextarea" readonly>[
+  {
+    "AllowedOrigins": [
+      "*"
+    ],
+    "AllowedMethods": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE"
+    ],
+    "AllowedHeaders": [
+      "*"
+    ]
+  }
+]</textarea><br>
+  <button id="copyButton">Copy CORS Config</button><br>
+
+  <button id="submitButton">Submit</button>
+  <button id="saveButton">Save</button>
+  <button id="reloadButton">Reload</button>
+
+  <div id="message"></div>
+  <div id="uploadStatus"></div>
+
+  <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1110.0.min.js"></script>
+  <script type="module">
+    import { S3Client, PutObjectCommand } from 'https://cdn.skypack.dev/@aws-sdk/client-s3';
+
+    const submitButton = document.getElementById('submitButton');
+    submitButton.addEventListener('click', handleBucketAndUpload);
+
+    const saveButton = document.getElementById('saveButton');
+    saveButton.addEventListener('click', saveCredentials);
+
+    const reloadButton = document.getElementById('reloadButton');
+    reloadButton.addEventListener('click', loadCredentials);
+
+    const messageElement = document.getElementById('message');
+    const uploadStatusElement = document.getElementById('uploadStatus');
+    const folderUploadCheckbox = document.getElementById('folderUpload');
+    const fileUploadInput = document.getElementById('fileUpload');
+    const copyButton = document.getElementById('copyButton');
+
+    folderUploadCheckbox.addEventListener('change', () => {
+      if (folderUploadCheckbox.checked) {
+        fileUploadInput.setAttribute('webkitdirectory', '');
+        fileUploadInput.removeAttribute('multiple');
+      } else {
+        fileUploadInput.removeAttribute('webkitdirectory');
+        fileUploadInput.setAttribute('multiple', '');
+      }
+    });
+
+    copyButton.addEventListener('click', () => {
+      const corsConfigTextarea = document.getElementById('corsConfigTextarea');
+      corsConfigTextarea.select();
+      document.execCommand('copy');
+      alert('CORS configuration copied to clipboard!');
+    });
+
+    // Load stored credentials
+    window.addEventListener('DOMContentLoaded', loadCredentials);
+
+    async function saveCredentials() {
+      const endpoint = document.getElementById('endpoint').value;
+      const accessKeyId = document.getElementById('accessKeyId').value;
+      const secretAccessKey = document.getElementById('secretAccessKey').value;
+
+      const credentials = {
+        endpoint: endpoint,
+        accessKeyId: accessKeyId,
+        secretAccessKey: secretAccessKey
+      };
+
+      localStorage.setItem('credentials', JSON.stringify(credentials));
+      console.log('Credentials saved successfully');
+    }
+
+    async function loadCredentials() {
+      const credentials = localStorage.getItem('credentials');
+      if (credentials) {
+        const { endpoint, accessKeyId, secretAccessKey } = JSON.parse(credentials);
+        document.getElementById('endpoint').value = endpoint;
+        document.getElementById('accessKeyId').value = accessKeyId;
+        document.getElementById('secretAccessKey').value = secretAccessKey;
+        console.log('Credentials loaded successfully');
+      } else {
+        console.log('No saved credentials found');
+      }
+    }
+
+    async function handleBucketAndUpload() {
+      const endpoint = document.getElementById('endpoint').value;
+      const accessKeyId = document.getElementById('accessKeyId').value;
+      const secretAccessKey = document.getElementById('secretAccessKey').value;
+      const bucketName = document.getElementById('bucketName').value;
+      const filePath = document.getElementById('filePath').value;
+      const fileUploads = document.getElementById('fileUpload').files;
+
+      if (fileUploads.length === 0) {
+        showMessage('Please select files/folders to upload', 'error');
+        return;
+      }
+
+      const S3 = new S3Client({
+        endpoint: endpoint,
+        credentials: {
+          accessKeyId: accessKeyId,
+          secretAccessKey: secretAccessKey
+        },
+        region: "auto"
+      });
+
+      uploadStatusElement.innerHTML = '';
+
+      for (const fileUpload of fileUploads) {
+        try {
+          const objectKey = folderUploadCheckbox.checked ?
+            (filePath ? `${filePath}/${fileUpload.webkitRelativePath}` : fileUpload.webkitRelativePath) :
+            (filePath ? `${filePath}/${fileUpload.name}` : fileUpload.name);
+
+          const uploadStatus = document.createElement('div');
+          uploadStatus.textContent = `Uploading "${fileUpload.name}"...`;
+          uploadStatusElement.appendChild(uploadStatus);
+
+          const uploadProgress = document.createElement('progress');
+          uploadProgress.value = 0;
+          uploadProgress.max = 100;
+          uploadStatusElement.appendChild(uploadProgress);
+
+          await S3.send(new PutObjectCommand({
+            Bucket: bucketName,
+            Key: objectKey,
+            Body: fileUpload,
+            onUploadProgress: (progress) => {
+              const percentCompleted = Math.round((progress.loaded * 100) / progress.total);
+              uploadProgress.value = percentCompleted;
+            }
+          }));
+
+          uploadStatus.textContent = `File "${fileUpload.name}" uploaded successfully to "${bucketName}/${objectKey}"`;
+          uploadStatus.classList.add('success');
+          uploadProgress.value = 100;
+        } catch (err) {
+          console.error('Error:', err);
+          const uploadStatus = document.createElement('div');
+          uploadStatus.textContent = `Error uploading "${fileUpload.name}"`;
+          uploadStatus.classList.add('error');
+          uploadStatusElement.appendChild(uploadStatus);
+        }
+      }
+
+      showMessage('File upload completed', 'success');
+    }
+
+    function showMessage(text, type) {
+      messageElement.textContent = text;
+      messageElement.className = type;
+    }
+  </script>
+</body>
+
+</html>
